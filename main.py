@@ -21,29 +21,39 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 class TaskRequest(BaseModel):
     tasks: str
 
-# System prompt with scheduling rules
+# System prompt with scheduling rules + tagging
 SYSTEM_PROMPT = """
-You are a scheduling assistant that converts natural language requests into a structured JSON object.  
+You are a scheduling assistant that converts natural language requests into a structured JSON object.
+
 Always respond **only** with valid JSON in the following format:
 
 {
   "conflicts": [ 
-    // list conflicts between tasks if times overlap 
+    // list conflicts between tasks if times overlap
   ],
   "scheduled_tasks": [
     {
       "category": "string",
       "title": "string",
       "description": "string",
-      "start_time": "YYYY-MM-DDTHH:MM:SS",  
+      "start_time": "YYYY-MM-DDTHH:MM:SS",
       "end_time": "YYYY-MM-DDTHH:MM:SS",
       "priority": number,
-      "reasoning": "string"
+      "reasoning": "string",
+      "tags": ["priority_tag", "category_tag"]
     }
   ],
   "suggestions": [],
   "summary": "string"
 }
+
+Tagging rules:
+- Each task must include a `"tags"` list with exactly 2 values:
+  1. A **priority tag** that corresponds to the numeric priority:
+     - 1 → "high"
+     - 2 → "medium"
+     - 3 → "low"
+  2. A **category tag** chosen from: ["work", "academic", "social", "extracurriculars", "others", "health", "fitness"]
 
 Scheduling rules:
 1. Extract **only the new tasks** from the user's request.  
@@ -53,36 +63,29 @@ Scheduling rules:
 5. Schedule new tasks only in **free time slots that do not overlap** with pre-scheduled tasks.  
 6. If the request contains a **long-term task with a future date (e.g., "exam next week" or "tryouts on October 7th")**, then:  
    - Treat that task as a **final goal**.  
-   - Generate **3-6 smaller subtasks** that logically build up to the final event (e.g., "review notes," "practice shooting").  
+   - Generate **3-6 smaller subtasks** that logically build up to the final event.  
    - Spread these subtasks evenly across the days leading up to the future date.  
    - Assign each subtask a short description explaining how it helps achieve the final task.  
-   - The **final event itself** (exam, tryout, etc.) should also appear on the actual due date with appropriate time.  
+   - The **final event itself** should also appear on the actual due date.  
 7. Assign **reasonable times of day by convention**:  
-   - Studying → mid-morning (10 AM-12 PM) or afternoon (2-4 PM).  
-   - Workouts → morning (7-10 AM) or late afternoon (4-6 PM).  
-   - Cooking dinner → evening (6-7 PM).  
-   - Cleaning/chores → late morning (11 AM) or mid-afternoon (3 PM).  
-8. Default task durations:  
-   - Studying = 2 hours  
-   - Workouts = 1 hour  
-   - Cooking dinner = 1 hour  
-   - Cleaning/chores = 30 minutes  
-   - If unspecified task → assume 1 hour.  
-9. Adjust task durations if the user specifies **relative intensity or quantity keywords**.  
+   - Studying → 10 AM–12 PM or 2–4 PM.  
+   - Workouts → 7–10 AM or 4–6 PM.  
+   - Cooking dinner → 6–7 PM.  
+   - Cleaning/chores → 11 AM or 3 PM.  
+8. Default durations: Studying = 2h, Workout = 1h, Cooking = 1h, Cleaning = 30m, unspecified = 1h.  
+9. Adjust task durations if the user specifies intensity or quantity.  
 10. Assign priorities: academics/work (1), chores (2), personal/leisure (3).  
-11. Provide reasoning for each task's placement in `"reasoning"`. Explicitly mention when the time was adjusted to avoid overlap with pre-scheduled tasks or the 30-minute buffer.  
+11. Provide reasoning for each task's placement. Mention when time was adjusted to avoid conflicts or the 30-minute buffer.  
 12. Ensure `conflicts` is empty unless two **new** tasks overlap.  
 13. Always return valid JSON only — no extra commentary.  
 """
-
-
-
 
 @app.post("/schedule")
 async def schedule_tasks(request: TaskRequest):
     today = date.today().strftime("%Y-%m-%d")
     now = datetime.now()
     earliest_start = (now + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
+
     print(f"DEBUG: Current time: {now.strftime('%Y-%m-%dT%H:%M:%S')}")
     print(f"DEBUG: Earliest start time: {earliest_start}")
 
@@ -103,9 +106,11 @@ async def schedule_tasks(request: TaskRequest):
             temperature=0.3,
             response_format={"type": "json_object"}
         )
+
         content = response.choices[0].message.content
         parsed_data = json.loads(content)
         return parsed_data
+
     except Exception as e:
         return JSONResponse(
             status_code=500,
